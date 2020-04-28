@@ -30,6 +30,8 @@ parser.add_argument('--temperature', type=float, default=1.0,
                     help='temperature - higher will increase diversity')
 parser.add_argument('--log-interval', type=int, default=100,
                     help='reporting interval')
+parser.add_argument('--strategy', type=str, default='sampling', choices=['sampling', 'greedy'],
+                    help='Choose between sampling and greedy search')
 args = parser.parse_args()
 
 # Set the random seed manually for reproducibility.
@@ -53,7 +55,18 @@ ntokens = len(corpus.dictionary)
 is_transformer_model = hasattr(model, 'model_type') and model.model_type == 'Transformer'
 if not is_transformer_model:
     hidden = model.init_hidden(1)
-input = torch.randint(ntokens, (1, 1), dtype=torch.long).to(device)
+
+if args.strategy == "sampling":
+    input = torch.randint(ntokens, (1, 1), dtype=torch.long).to(device)
+else:
+    input = torch.tensor(corpus.dictionary.word2idx['<eos>']).reshape((1, 1)).to(device)
+
+def pick_index(word_weights):
+
+    if args.strategy == "sampling":
+        return torch.multinomial(word_weights, 1)[0]
+    else:
+        return torch.argmax(word_weights)
 
 with open(args.outf, 'w') as outf:
     with torch.no_grad():  # no tracking history
@@ -61,13 +74,13 @@ with open(args.outf, 'w') as outf:
             if is_transformer_model:
                 output = model(input, False)
                 word_weights = output[-1].squeeze().div(args.temperature).exp().cpu()
-                word_idx = torch.multinomial(word_weights, 1)[0]
+                word_idx = pick_index(word_weights)
                 word_tensor = torch.Tensor([[word_idx]]).long().to(device)
                 input = torch.cat([input, word_tensor], 0)
             else:
                 output, hidden = model(input, hidden)
                 word_weights = output.squeeze().div(args.temperature).exp().cpu()
-                word_idx = torch.multinomial(word_weights, 1)[0]
+                word_idx = pick_index(word_weights)
                 input.fill_(word_idx)
 
             word = corpus.dictionary.idx2word[word_idx]
@@ -76,3 +89,4 @@ with open(args.outf, 'w') as outf:
 
             if i % args.log_interval == 0:
                 print('| Generated {}/{} words'.format(i, args.words))
+        outf.write("\n")
